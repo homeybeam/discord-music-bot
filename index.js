@@ -1,97 +1,78 @@
-require('dotenv').config();
 
-const { Client, GatewayIntentBits } = require('discord.js');
-const { Player } = require('discord-player');
-const {
-    SoundCloudExtractor,
-    SpotifyExtractor,
-    VimeoExtractor,
-    ReverbnationExtractor,
-    AppleMusicExtractor,
-    AttachmentExtractor
-} = require('@discord-player/extractor');
+require("dotenv").config();
+const { Client, GatewayIntentBits } = require("discord.js");
+const { Player } = require("discord-player");
+const { SpotifyExtractor } = require("@discord-player/extractor");
+const express = require("express");
 
+// Create a minimal Express server
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Keep-alive route
+app.get("/", (req, res) => {
+  res.send("Bot is alive!");
+});
+
+// Start Express server
+app.listen(PORT, () => {
+  console.log(`Keep-alive server running on port ${PORT}`);
+});
+
+// Discord bot setup
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildVoiceStates,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-    ]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 const player = new Player(client);
 
-// Register individual extractors
-(async () => {
-    await player.extractors.register(SoundCloudExtractor);
-    await player.extractors.register(SpotifyExtractor);
-    await player.extractors.register(VimeoExtractor);
-    await player.extractors.register(ReverbnationExtractor);
-    await player.extractors.register(AppleMusicExtractor);
-    await player.extractors.register(AttachmentExtractor);
-})();
+// Register extractors (like Spotify)
+player.extractors.register(SpotifyExtractor, {});
 
-client.on('ready', () => {
-    console.log(`Logged in as ${client.user.tag}`);
+client.on("ready", () => {
+  console.log(`Logged in as ${client.user.tag}`);
 });
 
-client.on('messageCreate', async (message) => {
-    if (message.author.bot || !message.guild) return;
+client.on("messageCreate", async (message) => {
+  if (!message.content.startsWith("!")) return;
 
-    const prefix = "!";
-    const args = message.content.slice(prefix.length).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
+  const args = message.content.slice(1).trim().split(/ +/);
+  const command = args.shift().toLowerCase();
 
-    if (!message.content.startsWith(prefix)) return;
+  if (command === "play") {
+    if (!args.length) return message.reply("You need to provide a song name or URL!");
+    const query = args.join(" ");
 
+    const channel = message.member?.voice?.channel;
+    if (!channel) return message.reply("Join a voice channel first!");
+
+    const { track } = await player.play(channel, query, {
+      nodeOptions: {
+        metadata: message,
+      },
+    });
+
+    message.reply(`🎶 Now playing: **${track.title}**`);
+  }
+
+  if (command === "skip") {
     const queue = player.nodes.get(message.guild.id);
+    if (!queue) return message.reply("No song is playing.");
+    queue.node.skip();
+    message.reply("⏭️ Skipped!");
+  }
 
-    if (command === 'play') {
-        const song = args.join(" ");
-        if (!song) return message.reply("Please provide a song name or URL.");
-
-        try {
-            const queue = player.nodes.create(message.guild, {
-                metadata: {
-                    channel: message.channel
-                }
-            });
-
-            await queue.connect(message.member.voice.channel);
-            await queue.play(song);
-
-            message.reply(`🎶 Playing: ${song}`);
-        } catch (error) {
-            console.error(error);
-            message.reply("Something went wrong while trying to play the song.");
-        }
-    }
-
-    if (command === 'pause') {
-        if (!queue || !queue.node.isPlaying()) return message.reply("No music is currently playing.");
-        queue.node.pause();
-        message.reply("⏸️ Paused the music.");
-    }
-
-    if (command === 'resume') {
-        if (!queue || queue.node.isPlaying()) return message.reply("Music is already playing.");
-        queue.node.resume();
-        message.reply("▶️ Resumed the music.");
-    }
-
-    if (command === 'skip') {
-        if (!queue || !queue.node.isPlaying()) return message.reply("No music is currently playing.");
-        queue.node.skip();
-        message.reply("⏭️ Skipped the current track.");
-    }
-
-    if (command === 'queue') {
-        if (!queue || !queue.tracks.toArray().length) return message.reply("The queue is empty.");
-        const tracks = queue.tracks.toArray().map((track, i) => `${i + 1}. ${track.title}`);
-        message.reply(`📃 Current Queue:
-${tracks.join('\n')}`);
-    }
+  if (command === "stop") {
+    const queue = player.nodes.get(message.guild.id);
+    if (!queue) return message.reply("Nothing to stop.");
+    queue.node.stop();
+    message.reply("⏹️ Stopped playback.");
+  }
 });
 
-client.login(process.env.BOT_TOKEN);
+client.login(process.env.DISCORD_TOKEN);
