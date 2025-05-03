@@ -1,78 +1,107 @@
-
 require("dotenv").config();
+
 const { Client, GatewayIntentBits } = require("discord.js");
 const { Player } = require("discord-player");
-const { SpotifyExtractor } = require("@discord-player/extractor");
-const express = require("express");
+const { DefaultExtractors } = require("@discord-player/extractor");
 
-// Create a minimal Express server
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Keep-alive route
-app.get("/", (req, res) => {
-  res.send("Bot is alive!");
-});
-
-// Start Express server
-app.listen(PORT, () => {
-  console.log(`Keep-alive server running on port ${PORT}`);
-});
-
-// Discord bot setup
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.MessageContent,
-  ],
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+    ]
 });
 
 const player = new Player(client);
 
-// Register extractors (like Spotify)
-player.extractors.register(SpotifyExtractor, {});
+(async () => {
+    await player.extractors.loadMulti(DefaultExtractors);
+})();
 
-client.on("ready", () => {
-  console.log(`Logged in as ${client.user.tag}`);
+client.once("ready", () => {
+    console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
 client.on("messageCreate", async (message) => {
-  if (!message.content.startsWith("!")) return;
+    if (!message.guild || message.author.bot) return;
 
-  const args = message.content.slice(1).trim().split(/ +/);
-  const command = args.shift().toLowerCase();
+    const args = message.content.trim().split(/ +/);
+    const command = args.shift().toLowerCase();
 
-  if (command === "play") {
-    if (!args.length) return message.reply("You need to provide a song name or URL!");
-    const query = args.join(" ");
+    if (command === "!play") {
+        if (!args[0]) return message.channel.send("Please provide a song name or URL.");
+        const query = args.join(" ");
+        const res = await player.search(query, {
+            requestedBy: message.author
+        });
 
-    const channel = message.member?.voice?.channel;
-    if (!channel) return message.reply("Join a voice channel first!");
+        if (!res || !res.tracks.length) return message.channel.send("No results found.");
 
-    const { track } = await player.play(channel, query, {
-      nodeOptions: {
-        metadata: message,
-      },
-    });
+        const queue = await player.nodes.create(message.guild, {
+            metadata: {
+                channel: message.channel
+            }
+        });
 
-    message.reply(`🎶 Now playing: **${track.title}**`);
-  }
+        try {
+            if (!queue.connection) await queue.connect(message.member.voice.channel);
+        } catch {
+            player.nodes.delete(message.guild.id);
+            return message.channel.send("Could not join your voice channel!");
+        }
 
-  if (command === "skip") {
-    const queue = player.nodes.get(message.guild.id);
-    if (!queue) return message.reply("No song is playing.");
-    queue.node.skip();
-    message.reply("⏭️ Skipped!");
-  }
+        queue.addTrack(res.tracks[0]);
+        if (!queue.node.isPlaying()) await queue.node.play();
+        message.channel.send(`🎶 Now playing **${res.tracks[0].title}**`);
+    }
 
-  if (command === "stop") {
-    const queue = player.nodes.get(message.guild.id);
-    if (!queue) return message.reply("Nothing to stop.");
-    queue.node.stop();
-    message.reply("⏹️ Stopped playback.");
-  }
+    if (command === "!skip") {
+        const queue = player.nodes.get(message.guild.id);
+        if (!queue || !queue.node.isPlaying()) return message.channel.send("Nothing is playing.");
+        queue.node.skip();
+        message.channel.send("⏭ Skipped.");
+    }
+
+    if (command === "!stop") {
+        const queue = player.nodes.get(message.guild.id);
+        if (!queue) return message.channel.send("Nothing to stop.");
+        queue.delete();
+        message.channel.send("⏹️ Stopped and disconnected.");
+    }
+
+    if (command === "!pause") {
+        const queue = player.nodes.get(message.guild.id);
+        if (!queue || !queue.node.isPlaying()) return message.channel.send("Nothing is playing.");
+        queue.node.pause();
+        message.channel.send("⏸ Paused.");
+    }
+
+    if (command === "!resume") {
+        const queue = player.nodes.get(message.guild.id);
+        if (!queue || queue.node.isPlaying()) return message.channel.send("Nothing is paused.");
+        queue.node.resume();
+        message.channel.send("▶️ Resumed.");
+    }
+
+    if (command === "!queue") {
+        const queue = player.nodes.get(message.guild.id);
+        if (!queue || !queue.tracks.size) return message.channel.send("Queue is empty.");
+        const tracks = queue.tracks.toArray().slice(0, 5).map((track, i) => `${i + 1}. ${track.title}`);
+        message.channel.send(`🎶 **Current Queue**:
+${tracks.join("\n")}`);
+    }
+
+    if (command === "!help") {
+        message.channel.send(`📜 **Available Commands:**\n
+- \`!play [song name or URL]\`
+- \`!skip\`
+- \`!stop\`
+- \`!pause\`
+- \`!resume\`
+- \`!queue\`
+- \`!help\``);
+    }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.TOKEN);
